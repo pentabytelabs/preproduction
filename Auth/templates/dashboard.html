@@ -1,0 +1,18 @@
+{% extends 'base.html' %}
+{% block title %}Dashboard{% endblock %}
+{% block content %}
+<div class="row">
+<div class="col-md-8">
+<div class="card shadow-sm">
+<div class="card-body">
+<h3>Hello, {{ username }}!</h3>
+<p>This is the next phase — session data available and you can now transfer/use it in your app DB or services.</p>
+<ul>
+<li>Session user id: {{ session.user_id }}</li>
+<li>Example: auth_key / customer_key are stored in auth DB and can be used here.</li>
+</ul>
+</div>
+</div>
+</div>
+</div>
+{% endblock %}

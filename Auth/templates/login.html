@@ -1,0 +1,43 @@
+{% extends 'base.html' %}
+{% block title %}Login{% endblock %}
+{% block content %}
+<div class="row justify-content-center">
+  <div class="col-md-6">
+    <div class="card shadow-sm p-4">
+      <h3 class="mb-4 text-center">Sign in to your account</h3>
+
+      <!-- Regular Email Login -->
+      <form method="post" action="{{ url_for('login') }}">
+        <div class="mb-3">
+          <label>Email</label>
+          <input type="email" name="email" class="form-control" required />
+        </div>
+        <div class="mb-3">
+          <label>Password</label>
+          <input type="password" name="password" class="form-control" required />
+        </div>
+        <button class="btn btn-primary w-100" type="submit">Login</button>
+      </form>
+
+      <div class="text-center mt-3">
+        <small><a href="{{ url_for('forgotpass') }}">Forgot password?</a></small>
+      </div>
+
+      <hr />
+
+      <!-- OAuth Buttons -->
+      <div class="d-grid gap-2 mt-3">
+        <a href="{{ url_for('login_google') }}" class="btn btn-light border d-flex align-items-center justify-content-center">
+          <img src="https://cdn.jsdelivr.net/gh/simple-icons/simple-icons/icons/google.svg" width="18" class="me-2"> Continue with Google
+        </a>
+        <a href="#" class="btn btn-dark d-flex align-items-center justify-content-center">
+          <img src="https://cdn.jsdelivr.net/gh/simple-icons/simple-icons/icons/apple.svg" width="18" class="me-2"> Continue with Apple
+        </a>
+        <a href="{{ url_for('login_linkedin') }}" class="btn btn-info d-flex align-items-center justify-content-center text-white">
+          <img src="https://cdn.jsdelivr.net/gh/simple-icons/simple-icons/icons/linkedin.svg" width="18" class="me-2"> Continue with LinkedIn
+        </a>
+      </div>
+    </div>
+  </div>
+</div>
+{% endblock %}
