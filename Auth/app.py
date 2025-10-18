@@ -148,26 +148,93 @@ def authorize_linkedin():
     return redirect(url_for('dashboard'))
 
 # ----------------- API ROUTES (JSON endpoints) -----------------
+# ---------------------- API ENDPOINTS ----------------------
+
 @app.route('/api/signup', methods=['POST'])
 def api_signup():
     data = request.json
-    username, email, password = data.get('username'), data.get('email').lower(), data.get('password')
+    username = data.get('username', '').strip()
+    email = data.get('email', '').strip().lower()
+    password = data.get('password', '')
+
+    if not username or not email or not password:
+        return jsonify({'error': 'Missing required fields'}), 400
+
     if get_user_by_email(email):
         return jsonify({'error': 'Email already exists'}), 409
 
-    create_user(username, email, generate_password_hash(password))
-    return jsonify({'message': 'User registered successfully'}), 201
+    hashed = generate_password_hash(password)
+    create_user(username, email, hashed)
+    return jsonify({'message': 'User created successfully'}), 201
+
 
 @app.route('/api/login', methods=['POST'])
 def api_login():
     data = request.json
-    email, password = data.get('email').lower(), data.get('password')
+    email = data.get('email', '').strip().lower()
+    password = data.get('password', '')
+
     user = get_user_by_email(email)
     if not user or not check_password_hash(user[3], password):
         return jsonify({'error': 'Invalid credentials'}), 401
 
-    login_user(user[0], user[1])
+    session['user_id'] = user[0]
+    session['username'] = user[1]
     return jsonify({'message': 'Login successful', 'username': user[1]}), 200
+
+
+@app.route('/api/profile', methods=['GET'])
+def api_profile():
+    if 'user_id' not in session:
+        return jsonify({'error': 'Unauthorized'}), 401
+    return jsonify({'user_id': session['user_id'], 'username': session['username']}), 200
+
+
+@app.route('/api/logout', methods=['POST'])
+def api_logout():
+    session.clear()
+    return jsonify({'message': 'Logged out successfully'}), 200
+
+
+# ---------- Forgot & Reset Password (API Version) ----------
+@app.route('/api/forgot', methods=['POST'])
+def api_forgot():
+    data = request.json
+    email = data.get('email', '').strip().lower()
+    user = get_user_by_email(email)
+    if not user:
+        return jsonify({'error': 'No account found with that email'}), 404
+
+    otp = f"{secrets.randbelow(1000000):06d}"
+    with sqlite3.connect(DB_PATH) as conn:
+        c = conn.cursor()
+        c.execute("UPDATE users SET otp=? WHERE email=?", (otp, email))
+        conn.commit()
+
+    # Demo only: Return OTP in response. In real systems, send via email/SMS.
+    return jsonify({'message': 'OTP sent (demo only)', 'otp': otp}), 200
+
+
+@app.route('/api/reset', methods=['POST'])
+def api_reset():
+    data = request.json
+    email = data.get('email', '').strip().lower()
+    otp = data.get('otp', '').strip()
+    new_password = data.get('new_password', '')
+
+    with sqlite3.connect(DB_PATH) as conn:
+        c = conn.cursor()
+        c.execute("SELECT otp FROM users WHERE email=?", (email,))
+        record = c.fetchone()
+        if not record or record[0] != otp:
+            return jsonify({'error': 'Invalid OTP or email'}), 400
+
+        hashed = generate_password_hash(new_password)
+        c.execute("UPDATE users SET password=?, otp=NULL WHERE email=?", (hashed, email))
+        conn.commit()
+
+    return jsonify({'message': 'Password reset successful'}), 200
+
 # ----------------- PASSWORD RESET (UI DEMO) -----------------
 @app.route('/forgotpass', methods=['GET', 'POST'])
 def forgotpass():
@@ -206,17 +273,6 @@ def resetpass():
         else:
             flash("Invalid OTP or email.", "danger")
             return render_template('resetpass.html')
-
-@app.route('/api/profile')
-def api_profile():
-    if 'user_id' not in session:
-        return jsonify({'error': 'Not logged in'}), 401
-    return jsonify({'user_id': session['user_id'], 'username': session['username']}), 200
-
-@app.route('/api/logout', methods=['POST'])
-def api_logout():
-    logout_user()
-    return jsonify({'message': 'Logged out successfully'}), 200
 
 # ----------------- MAIN -----------------
 if __name__ == '__main__':

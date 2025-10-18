@@ -1,0 +1,16 @@
+Function	HTTP Method	Endpoint	Description	Body / Params	Returns
+Signup	POST	/api/signup	Register new user	{"username":"Roshan","email":"test@mail.com","password":"1234"}	{ "message": "User created successfully" }
+
+Login (email)	POST	/api/login	Login with email/password	{"email":"test@mail.com","password":"1234"}	{ "message": "Login successful", "username": "Roshan" }
+
+Logout	POST	/api/logout	Logout current user	–	{ "message": "Logged out successfully" }
+
+Profile	GET	/api/profile	Get logged-in user details	–	{ "user_id": 1, "username": "Roshan" }
+
+Forgot Password	POST	/api/forgot	Request OTP	{"email":"test@mail.com"}	{ "message": "OTP sent (demo)", "otp": "123456" }
+
+Reset Password	POST	/api/reset	Reset using OTP	{"email":"test@mail.com","otp":"123456","new_password":"new123"}	{ "message": "Password reset successful" }
+
+Google OAuth	GET	/api/login/google	Redirect to Google	–	Redirect to Google
+
+Google OAuth Callback	GET	/api/authorize/google	Handle Google callback	–	{ "message": "OAuth login successful", "user": {...} }
