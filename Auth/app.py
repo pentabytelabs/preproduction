@@ -2,6 +2,8 @@ from flask import Flask, render_template, redirect, url_for, session, request, f
 import sqlite3, secrets, os
 from werkzeug.security import generate_password_hash, check_password_hash
 from authlib.integrations.flask_client import OAuth
+from flask_mail import Mail, Message
+from datetime import datetime, timedelta
 
 app = Flask(__name__)
 app.secret_key = os.getenv("SECRET_KEY", secrets.token_hex(16))
@@ -15,7 +17,62 @@ app.config.update({
     'LINKEDIN_CLIENT_ID': os.getenv('LINKEDIN_CLIENT_ID', 'YOUR_LINKEDIN_CLIENT_ID'),
     'LINKEDIN_CLIENT_SECRET': os.getenv('LINKEDIN_CLIENT_SECRET', 'YOUR_LINKEDIN_CLIENT_SECRET'),
 })
+# top of app.py (near other imports)
+from dotenv import load_dotenv
+load_dotenv()
 
+# mail config (use envs; convert strings to booleans/ints)
+app.config.update(
+    MAIL_SERVER=os.getenv('MAIL_SERVER', 'smtp.gmail.com'),
+    MAIL_PORT=int(os.getenv('MAIL_PORT', 587)),
+    MAIL_USE_TLS=os.getenv('MAIL_USE_TLS', 'True') == 'True',
+    MAIL_USE_SSL=os.getenv('MAIL_USE_SSL', 'False') == 'True',
+    MAIL_USERNAME=os.getenv('MAIL_USERNAME'),   # must be Gmail address
+    MAIL_PASSWORD=os.getenv('MAIL_PASSWORD'),   # app password w/o spaces
+    MAIL_DEFAULT_SENDER=os.getenv('MAIL_DEFAULT_SENDER', os.getenv('MAIL_USERNAME'))
+)
+
+# remove debug prints of sensitive info in production; show only username/server for debug
+print("MAIL_USERNAME:", app.config.get('MAIL_USERNAME'))
+print("MAIL_SERVER:", app.config.get('MAIL_SERVER'))
+print("MAIL_PORT:", app.config.get('MAIL_PORT'))
+print("MAIL_USE_TLS:", app.config.get('MAIL_USE_TLS'))
+print("MAIL_USE_SSL:", app.config.get('MAIL_USE_SSL'))
+print("MAIL_PASSWORD set:", bool(app.config.get('MAIL_PASSWORD')))
+
+mail = Mail(app)
+from threading import Thread
+from smtplib import SMTPAuthenticationError, SMTPException
+
+def _send_async(app, msg):
+    with app.app_context():
+        mail.send(msg)
+
+def send_email_async(subject, recipients, body):
+    msg = Message(subject, recipients=recipients)
+    msg.body = body
+    thr = Thread(target=_send_async, args=(app, msg), daemon=True)
+    thr.start()
+    return thr
+
+# blocking send with detailed error for debug
+def try_send_email(subject, recipients, body):
+    msg = Message(subject, recipients=recipients)
+    msg.body = body
+    try:
+        mail.send(msg)            # blocking so we can capture error in API response
+        return True, None
+    except SMTPAuthenticationError as e:
+        app.logger.error("SMTPAuthenticationError: %s", e)
+        return False, f"SMTPAuthenticationError: {e}"
+    except SMTPException as e:
+        app.logger.error("SMTPException: %s", e)
+        return False, f"SMTPException: {e}"
+    except Exception as e:
+        app.logger.exception("Unexpected error sending email")
+        return False, f"Unexpected error: {e}"
+
+    
 google = oauth.register(
     name='google',
     client_id=app.config['GOOGLE_CLIENT_ID'],
@@ -46,8 +103,13 @@ def get_user_by_email(email):
 def create_user(username, email, password_hash=''):
     with sqlite3.connect(DB_PATH) as conn:
         c = conn.cursor()
-        c.execute("INSERT OR IGNORE INTO users (username, email, password) VALUES (?, ?, ?)", (username, email, password_hash))
-        conn.commit()
+        try:
+            c.execute("INSERT INTO users (username, email, password) VALUES (?, ?, ?)", (username, email, password_hash))
+            conn.commit()
+            return c.lastrowid
+        except sqlite3.IntegrityError as e:
+            raise
+
 
 # ----------------- COMMON FUNCTIONS -----------------
 def login_user(user_id, username):
@@ -195,8 +257,17 @@ def api_logout():
     session.clear()
     return jsonify({'message': 'Logged out successfully'}), 200
 
+@app.route('/test-email')
+def test_email():
+    try:
+        msg = Message("Test Email from Flask", recipients=["recipient@example.com"])
+        msg.body = "Hello — this is a test email from Flask-Mail."
+        mail.send(msg)
+        return "Email sent"
+    except Exception as e:
+        return f"Error: {e}", 500
+OTP_RESEND_COOLDOWN = 30  # seconds - don't allow resend while previous OTP still valid
 
-# ---------- Forgot & Reset Password (API Version) ----------
 @app.route('/api/forgot', methods=['POST'])
 def api_forgot():
     data = request.json
@@ -206,13 +277,67 @@ def api_forgot():
         return jsonify({'error': 'No account found with that email'}), 404
 
     otp = f"{secrets.randbelow(1000000):06d}"
+    expiry_dt = datetime.utcnow() + timedelta(seconds=60)
+    expiry_iso = expiry_dt.isoformat()
+
     with sqlite3.connect(DB_PATH) as conn:
         c = conn.cursor()
-        c.execute("UPDATE users SET otp=? WHERE email=?", (otp, email))
+        c.execute("UPDATE users SET otp=?, otp_expiry=? WHERE email=?", (otp, expiry_iso, email))
         conn.commit()
 
-    # Demo only: Return OTP in response. In real systems, send via email/SMS.
-    return jsonify({'message': 'OTP sent (demo only)', 'otp': otp}), 200
+    subject = "Your OTP for Password Reset"
+    body = f"Your OTP is {otp}. It will expire in 60 seconds."
+
+    ok, err = try_send_email(subject, [email], body)
+    if not ok:
+        return jsonify({'error': 'Failed to send OTP', 'detail': err}), 500
+
+    return jsonify({'message': 'OTP sent to your email', 'expiry': 60}), 200
+
+
+@app.route('/api/resend-otp', methods=['POST'])
+def api_resend_otp():
+    data = request.json
+    email = data.get('email', '').strip().lower()
+    user = get_user_by_email(email)
+    if not user:
+        return jsonify({'error': 'No account with that email'}), 404
+
+    # check existing expiry to avoid frequent resends
+    with sqlite3.connect(DB_PATH) as conn:
+        c = conn.cursor()
+        c.execute("SELECT otp_expiry FROM users WHERE email=?", (email,))
+        row = c.fetchone()
+        existing_expiry = row[0] if row else None
+
+    if existing_expiry:
+        try:
+            existing_dt = datetime.fromisoformat(existing_expiry)
+            seconds_left = (existing_dt - datetime.utcnow()).total_seconds()
+            if seconds_left > 0 and seconds_left > (60 - OTP_RESEND_COOLDOWN):
+                # still recently issued: deny resend, tell user to wait
+                return jsonify({'error': 'OTP recently sent. Please wait', 'wait_seconds': int(seconds_left)}), 429
+        except Exception:
+            # if parse fails, allow new OTP
+            pass
+
+    otp = f"{secrets.randbelow(1000000):06d}"
+    expiry_dt = datetime.utcnow() + timedelta(seconds=60)
+    expiry_iso = expiry_dt.isoformat()
+
+    with sqlite3.connect(DB_PATH) as conn:
+        c = conn.cursor()
+        c.execute("UPDATE users SET otp=?, otp_expiry=? WHERE email=?", (otp, expiry_iso, email))
+        conn.commit()
+
+    subject = "Resent OTP"
+    body = f"Your new OTP is {otp}. It will expire in 60 seconds."
+
+    ok, err = try_send_email(subject, [email], body)
+    if not ok:
+        return jsonify({'error': 'Failed to send OTP', 'detail': err}), 500
+
+    return jsonify({'message': 'New OTP sent', 'expiry': 60}), 200
 
 
 @app.route('/api/reset', methods=['POST'])
@@ -224,16 +349,35 @@ def api_reset():
 
     with sqlite3.connect(DB_PATH) as conn:
         c = conn.cursor()
-        c.execute("SELECT otp FROM users WHERE email=?", (email,))
+        c.execute("SELECT otp, otp_expiry FROM users WHERE email=?", (email,))
         record = c.fetchone()
-        if not record or record[0] != otp:
-            return jsonify({'error': 'Invalid OTP or email'}), 400
 
+        if not record or not record[0] or record[0] != otp:
+            return jsonify({'error': 'Invalid OTP'}), 400
+
+        otp_expiry = record[1]
+        if not otp_expiry:
+            return jsonify({'error': 'OTP not found / expired'}), 400
+
+        try:
+            expiry_dt = datetime.fromisoformat(otp_expiry)
+        except Exception:
+            # always safe-fail to expired if parsing fails
+            expiry_dt = datetime.utcnow() - timedelta(seconds=1)
+
+        if datetime.utcnow() > expiry_dt:
+            # expired — clear OTP immediately
+            c.execute("UPDATE users SET otp=NULL, otp_expiry=NULL WHERE email=?", (email,))
+            conn.commit()
+            return jsonify({'error': 'OTP expired'}), 400
+
+        # valid -> update password and clear otp
         hashed = generate_password_hash(new_password)
-        c.execute("UPDATE users SET password=?, otp=NULL WHERE email=?", (hashed, email))
+        c.execute("UPDATE users SET password=?, otp=NULL, otp_expiry=NULL WHERE email=?", (hashed, email))
         conn.commit()
 
     return jsonify({'message': 'Password reset successful'}), 200
+
 
 # ----------------- PASSWORD RESET (UI DEMO) -----------------
 @app.route('/forgotpass', methods=['GET', 'POST'])
@@ -246,10 +390,16 @@ def forgotpass():
         flash('No account with that email.', 'warning')
         return render_template('forgotpass.html')
     otp = f"{secrets.randbelow(1000000):06d}"
+    expiry_iso = (datetime.utcnow() + timedelta(seconds=60)).isoformat()
     with sqlite3.connect(DB_PATH) as conn:
         c = conn.cursor()
-        c.execute("UPDATE users SET otp=? WHERE email=?", (otp, email))
+        c.execute("UPDATE users SET otp=?, otp_expiry=? WHERE email=?", (otp, expiry_iso, email))
         conn.commit()
+    # then send email (or flash for demo)
+    send_email_async("Your OTP", [email], f"Your OTP is {otp}. Expires in 60s")
+    flash("OTP sent to your email (check inbox).", "info")
+
+
     flash(f"OTP (demo only): {otp}", "info")
     return redirect(url_for('resetpass'))
 

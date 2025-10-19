@@ -22,7 +22,8 @@ CREATE TABLE IF NOT EXISTS users (
     password TEXT NOT NULL,
     auth_key TEXT,
     customer_key TEXT,
-    otp TEXT
+    otp TEXT,
+    otp_expiry TIMESTAMP
 );
 """
 
