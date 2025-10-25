@@ -1,0 +1,110 @@
+# ==============================================
+# Global .gitignore for preproduction repository
+# Works for all Python / Flask sub-projects like Auth/
+# ==============================================
+
+# -----------------------------
+# Python / Flask
+# -----------------------------
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Bytecode cache and compiled modules
+*.pyo
+*.pyd
+*.pdb
+
+# Virtual environments (Auth/venv etc.)
+venv/
+env/
+ENV/
+.venv/
+
+# Environment and secret files
+.env
+*.env
+.env.*
+Auth/.env
+
+# Local SQLite databases
+*.db
+*.sqlite3
+Auth/auth.db
+
+# Flask instance & temp files
+instance/
+*.log
+*.pid
+*.seed
+*.bak
+*.swp
+*.tmp
+
+# -----------------------------
+# Build / Packaging / Distribution
+# -----------------------------
+build/
+dist/
+*.egg-info/
+.eggs/
+*.manifest
+*.spec
+
+# -----------------------------
+# Testing & Coverage
+# -----------------------------
+htmlcov/
+.tox/
+.nox/
+.coverage
+*.cover
+coverage.xml
+
+# -----------------------------
+# IDE / Editor Configs
+# -----------------------------
+.vscode/
+.idea/
+*.sublime-workspace
+*.sublime-project
+
+# -----------------------------
+# OS generated files
+# -----------------------------
+.DS_Store
+Thumbs.db
+ehthumbs.db
+Icon?
+
+# -----------------------------
+# Node / Frontend (if added later)
+# -----------------------------
+node_modules/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+
+# -----------------------------
+# Project-specific
+# -----------------------------
+# Ignore Auth app database & backups
+Auth/*.db
+Auth/*.bak
+Auth/config_backup/
+Auth/settings_backup/
+
+# Compiled static assets (if bundling frontend)
+Auth/static/js/build/
+Auth/static/css/build/
+
+# Temporary uploads or exports
+Auth/uploads/
+Auth/tmp/
+
+# -----------------------------
+# Misc
+# -----------------------------
+*.retry
+*.old
+*.orig
